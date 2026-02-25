@@ -168,6 +168,35 @@ async def test_duplicate_commit_rejected(api_client):
     await asyncio.sleep(0.1)
 
 
+async def test_wait_true_rejected_while_background_commit_running(api_client):
+    """wait=true must also reject duplicate commits for the same session."""
+    client, service = api_client
+    session_id = await _new_session_with_message(client)
+
+    gate = asyncio.Event()
+
+    async def slow_commit(_sid, _ctx):
+        await gate.wait()
+        return {"session_id": _sid, "status": "committed", "memories_extracted": 0}
+
+    service.sessions.commit_async = slow_commit
+
+    resp1 = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
+    assert resp1.json()["result"]["status"] == "accepted"
+
+    resp2 = await client.post(
+        f"/api/v1/sessions/{session_id}/commit",
+        params={"wait": True},
+        json={"trace": True},
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["status"] == "error"
+    assert "already has a commit in progress" in resp2.json()["error"]["message"]
+
+    gate.set()
+    await asyncio.sleep(0.1)
+
+
 # ── GET /tasks/{id} 404 ──
 
 

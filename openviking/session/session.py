@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
+from openviking.trace import get_trace_collector
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -220,6 +221,8 @@ class Session:
 
     def commit(self) -> Dict[str, Any]:
         """Commit session: create archive, extract memories, persist."""
+        trace = get_trace_collector()
+        trace.event("session.commit", "commit_start", {"session_id": self.session_id})
         result = {
             "session_id": self.session_id,
             "status": "committed",
@@ -229,6 +232,8 @@ class Session:
             "stats": None,
         }
         if not self._messages:
+            trace.set("memory.memories_extracted", 0)
+            trace.event("session.commit", "commit_done", {"memories_extracted": 0})
             return result
 
         # 1. Archive current messages
@@ -270,6 +275,12 @@ class Session:
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
+            trace.set("memory.memories_extracted", len(memories))
+            trace.event(
+                "session.commit",
+                "memory_extraction_done",
+                {"memories_extracted": len(memories)},
+            )
 
         # 3. Write current messages to AGFS
         self._write_to_agfs(self._messages)
@@ -292,10 +303,17 @@ class Session:
 
         self._stats.total_tokens = 0
         logger.info(f"Session {self.session_id} committed")
+        trace.event(
+            "session.commit",
+            "commit_done",
+            {"memories_extracted": result["memories_extracted"]},
+        )
         return result
 
     async def commit_async(self) -> Dict[str, Any]:
         """Async commit session: create archive, extract memories, persist."""
+        trace = get_trace_collector()
+        trace.event("session.commit", "commit_start", {"session_id": self.session_id})
         result = {
             "session_id": self.session_id,
             "status": "committed",
@@ -305,6 +323,8 @@ class Session:
             "stats": None,
         }
         if not self._messages:
+            trace.set("memory.memories_extracted", 0)
+            trace.event("session.commit", "commit_done", {"memories_extracted": 0})
             return result
 
         # 1. Archive current messages
@@ -344,6 +364,12 @@ class Session:
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
+            trace.set("memory.memories_extracted", len(memories))
+            trace.event(
+                "session.commit",
+                "memory_extraction_done",
+                {"memories_extracted": len(memories)},
+            )
 
         # 3. Write current messages to AGFS
         await self._write_to_agfs_async(self._messages)
@@ -366,6 +392,11 @@ class Session:
 
         self._stats.total_tokens = 0
         logger.info(f"Session {self.session_id} committed (async)")
+        trace.event(
+            "session.commit",
+            "commit_done",
+            {"memories_extracted": result["memories_extracted"]},
+        )
         return result
 
     def _update_active_counts(self) -> int:

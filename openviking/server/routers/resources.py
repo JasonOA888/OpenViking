@@ -14,6 +14,8 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.trace import create_collector, inject_trace
+from openviking.trace import bind_trace_collector
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -25,6 +27,7 @@ class AddResourceRequest(BaseModel):
 
     path: Optional[str] = None
     temp_path: Optional[str] = None
+    target: Optional[str] = None
     to: Optional[str] = None
     parent: Optional[str] = None
     reason: str = ""
@@ -36,11 +39,16 @@ class AddResourceRequest(BaseModel):
     include: Optional[str] = None
     exclude: Optional[str] = None
     directly_upload_media: bool = True
+    trace: bool = False
 
     @model_validator(mode="after")
-    def check_path_or_temp_path(self):
+    def validate_targeting(self):
         if not self.path and not self.temp_path:
             raise ValueError("Either 'path' or 'temp_path' must be provided")
+        if self.target and self.to:
+            raise ValueError("Cannot specify both 'target' and 'to'")
+        if (self.target or self.to) and self.parent:
+            raise ValueError("Cannot specify both target/to and 'parent'")
         return self
 
 
@@ -51,6 +59,7 @@ class AddSkillRequest(BaseModel):
     temp_path: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
+    trace: bool = False
 
 
 def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
@@ -97,33 +106,36 @@ async def add_resource(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add resource to OpenViking."""
-    # Validate request: only one of 'to' or 'parent' can be set
-    if request.to and request.parent:
-        raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
-
     service = get_service()
+    effective_to = request.to or request.target
+    if request.to and request.target:
+        raise InvalidArgumentError("Cannot specify both 'to' and 'target' at the same time.")
+    if effective_to and request.parent:
+        raise InvalidArgumentError("Cannot specify both target/to and 'parent' at the same time.")
 
     path = request.path
     if request.temp_path:
         path = request.temp_path
     if path is None:
         raise InvalidArgumentError("Either 'path' or 'temp_path' must be provided.")
-
-    result = await service.resources.add_resource(
-        path=path,
-        ctx=_ctx,
-        to=request.to,
-        parent=request.parent,
-        reason=request.reason,
-        instruction=request.instruction,
-        wait=request.wait,
-        timeout=request.timeout,
-        strict=request.strict,
-        ignore_dirs=request.ignore_dirs,
-        include=request.include,
-        exclude=request.exclude,
-        directly_upload_media=request.directly_upload_media,
-    )
+    collector = create_collector("resources.add_resource", request.trace)
+    with bind_trace_collector(collector):
+        result = await service.resources.add_resource(
+            path=path,
+            ctx=_ctx,
+            to=effective_to,
+            parent=request.parent,
+            reason=request.reason,
+            instruction=request.instruction,
+            wait=request.wait,
+            timeout=request.timeout,
+            strict=request.strict,
+            ignore_dirs=request.ignore_dirs,
+            include=request.include,
+            exclude=request.exclude,
+            directly_upload_media=request.directly_upload_media,
+        )
+        result = inject_trace(result, collector, status="ok")
     return Response(status="ok", result=result)
 
 
@@ -134,15 +146,17 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
-
     data = request.data
     if request.temp_path:
         data = request.temp_path
 
-    result = await service.resources.add_skill(
-        data=data,
-        ctx=_ctx,
-        wait=request.wait,
-        timeout=request.timeout,
-    )
+    collector = create_collector("resources.add_skill", request.trace)
+    with bind_trace_collector(collector):
+        result = await service.resources.add_skill(
+            data=data,
+            ctx=_ctx,
+            wait=request.wait,
+            timeout=request.timeout,
+        )
+        result = inject_trace(result, collector, status="ok")
     return Response(status="ok", result=result)

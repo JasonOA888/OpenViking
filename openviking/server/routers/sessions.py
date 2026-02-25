@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Body, Depends, Path, Query
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
@@ -14,7 +14,9 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.trace import create_collector, inject_trace
 from openviking.service.task_tracker import get_task_tracker
+from openviking.trace import bind_trace_collector
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -71,6 +73,12 @@ class AddMessageRequest(BaseModel):
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
         return self
+
+
+class CommitSessionRequest(BaseModel):
+    """Request model for session commit."""
+
+    trace: bool = False
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -144,6 +152,7 @@ async def delete_session(
 
 @router.post("/{session_id}/commit")
 async def commit_session(
+    request: CommitSessionRequest = Body(default_factory=CommitSessionRequest),
     session_id: str = Path(..., description="Session ID"),
     wait: bool = Query(
         True,
@@ -173,7 +182,10 @@ async def commit_session(
                     message=f"Session {session_id} already has a commit in progress",
                 ),
             )
-        result = await service.sessions.commit_async(session_id, _ctx)
+        collector = create_collector("session.commit", request.trace)
+        with bind_trace_collector(collector):
+            result = await service.sessions.commit_async(session_id, _ctx)
+            result = inject_trace(result, collector, status="ok")
         return Response(status="ok", result=result)
 
     # Atomically check + create to prevent race conditions

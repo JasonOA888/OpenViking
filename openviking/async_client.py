@@ -164,10 +164,10 @@ class AsyncOpenViking:
             session_id=session_id, role=role, content=content, parts=parts
         )
 
-    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+    async def commit_session(self, session_id: str, trace: bool = False) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
-        return await self._client.commit_session(session_id)
+        return await self._client.commit_session(session_id, trace=trace)
 
     # ============= Resource methods =============
 
@@ -182,6 +182,8 @@ class AsyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        trace: bool = False,
+        target: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -196,16 +198,20 @@ class AsyncOpenViking:
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            trace: Whether to attach request trace data to the result.
+            target: Backward-compatible alias for ``to``.
         """
         await self._ensure_initialized()
 
-        # Validate that only one of 'to' or 'parent' is set
-        if to and parent:
-            raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
+        effective_to = to or target
+        if target and to:
+            raise ValueError("Cannot specify both 'target' and 'to' at the same time.")
+        if effective_to and parent:
+            raise ValueError("Cannot specify both target/to and 'parent' at the same time.")
 
         return await self._client.add_resource(
             path=path,
-            to=to,
+            to=effective_to,
             parent=parent,
             reason=reason,
             instruction=instruction,
@@ -213,6 +219,7 @@ class AsyncOpenViking:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            trace=trace,
             **kwargs,
         )
 
@@ -246,6 +253,7 @@ class AsyncOpenViking:
         data: Any,
         wait: bool = False,
         timeout: float = None,
+        trace: bool = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -258,6 +266,7 @@ class AsyncOpenViking:
             data=data,
             wait=wait,
             timeout=timeout,
+            trace=trace,
         )
 
     # ============= Search methods =============
@@ -271,6 +280,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        trace: bool = False,
     ):
         """
         Complex search with session context.
@@ -295,6 +305,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            trace=trace,
         )
 
     async def find(
@@ -304,6 +315,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        trace: bool = False,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -313,6 +325,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            trace=trace,
         )
 
     # ============= FS methods =============

@@ -16,6 +16,7 @@ from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingVectorIndexBackend
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.trace import get_trace_collector
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -99,6 +100,15 @@ class HierarchicalRetriever:
             grep_patterns: Keyword match pattern list
             scope_dsl: Additional scope constraints passed from public find/search filter
         """
+        trace = get_trace_collector()
+        trace.event(
+            "retriever.retrieve",
+            "retrieve_start",
+            {
+                "context_type": query.context_type.value if query.context_type else "all",
+                "limit": limit,
+            },
+        )
 
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
@@ -109,6 +119,11 @@ class HierarchicalRetriever:
             logger.warning(
                 "[RecursiveSearch] Collection %s does not exist",
                 self.vector_store.collection_name,
+            )
+            trace.event(
+                "retriever.retrieve",
+                "collection_missing",
+                {"collection": self.vector_store.collection_name},
             )
             return QueryResult(
                 query=query,
@@ -140,9 +155,19 @@ class HierarchicalRetriever:
             scope_dsl=scope_dsl,
             limit=self.GLOBAL_SEARCH_TOPK,
         )
+        trace.event(
+            "retriever.global_search",
+            "global_search_done",
+            {"hits": len(global_results)},
+        )
 
         # Step 3: Merge starting points
         starting_points = self._merge_starting_points(query.query, root_uris, global_results)
+        trace.event(
+            "retriever.starting_points",
+            "starting_points_merged",
+            {"count": len(starting_points)},
+        )
 
         # Step 4: Recursive search
         candidates = await self._recursive_search(
@@ -159,9 +184,19 @@ class HierarchicalRetriever:
             target_dirs=target_dirs,
             scope_dsl=scope_dsl,
         )
+        trace.event(
+            "retriever.recursive",
+            "recursive_search_done",
+            {"candidates": len(candidates)},
+        )
 
         # Step 6: Convert results
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
+        trace.event(
+            "retriever.retrieve",
+            "retrieve_done",
+            {"matched_contexts": len(matched[:limit])},
+        )
 
         return QueryResult(
             query=query,
@@ -189,6 +224,10 @@ class HierarchicalRetriever:
             extra_filter=scope_dsl,
             limit=limit,
         )
+        trace = get_trace_collector()
+        trace.count("vector.search_calls", 1)
+        trace.count("vector.candidates_scored", len(results))
+        trace.count("vector.vectors_scanned", len(results))
         return results
 
     def _merge_starting_points(
@@ -283,6 +322,12 @@ class HierarchicalRetriever:
                 continue
             visited.add(current_uri)
             logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
+            trace = get_trace_collector()
+            trace.event(
+                "retriever.directory",
+                "directory_entered",
+                {"uri": current_uri, "queue_size": len(dir_queue)},
+            )
 
             pre_filter_limit = max(limit * 2, 20)
 
@@ -295,6 +340,14 @@ class HierarchicalRetriever:
                 target_directories=target_dirs,
                 extra_filter=scope_dsl,
                 limit=pre_filter_limit,
+            )
+            trace.count("vector.search_calls", 1)
+            trace.count("vector.candidates_scored", len(results))
+            trace.count("vector.vectors_scanned", len(results))
+            trace.event(
+                "retriever.directory",
+                "directory_results",
+                {"uri": current_uri, "hits": len(results)},
             )
 
             if not results:
@@ -326,6 +379,7 @@ class HierarchicalRetriever:
                     )
                     continue
 
+                trace.count("vector.candidates_after_threshold", 1)
                 # Deduplicate by URI and keep the highest-scored candidate.
                 previous = collected_by_uri.get(uri)
                 if previous is None or final_score > previous.get("_final_score", 0):

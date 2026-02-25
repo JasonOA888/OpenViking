@@ -5,8 +5,6 @@
 
 import httpx
 
-from tests.server.conftest import SAMPLE_MD_CONTENT
-
 
 async def test_add_resource_success(client: httpx.AsyncClient, sample_markdown_file):
     resp = await client.post(
@@ -37,6 +35,27 @@ async def test_add_resource_with_wait(client: httpx.AsyncClient, sample_markdown
     body = resp.json()
     assert body["status"] == "ok"
     assert "root_uri" in body["result"]
+
+
+async def test_add_resource_with_trace_wait(client: httpx.AsyncClient, sample_markdown_file):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": str(sample_markdown_file),
+            "reason": "trace resource",
+            "wait": True,
+            "trace": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    trace_summary = body["result"]["trace"]["summary"]
+    assert trace_summary["operation"] == "resources.add_resource"
+    semantic = trace_summary["semantic_nodes"]
+    assert semantic["total_nodes"] is None or semantic["done_nodes"] == semantic["total_nodes"]
+    assert semantic["pending_nodes"] in (None, 0)
+    assert semantic["in_progress_nodes"] in (None, 0)
 
 
 async def test_add_resource_file_not_found(client: httpx.AsyncClient):

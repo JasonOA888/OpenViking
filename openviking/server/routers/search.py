@@ -11,6 +11,8 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.trace import create_collector, inject_trace
+from openviking.trace import bind_trace_collector
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
@@ -24,6 +26,7 @@ class FindRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    trace: bool = False
 
 
 class SearchRequest(BaseModel):
@@ -36,6 +39,7 @@ class SearchRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    trace: bool = False
 
 
 class GrepRequest(BaseModel):
@@ -63,17 +67,20 @@ async def find(
     """Semantic search without session context."""
     service = get_service()
     actual_limit = request.node_limit if request.node_limit is not None else request.limit
-    result = await service.search.find(
-        query=request.query,
-        ctx=_ctx,
-        target_uri=request.target_uri,
-        limit=actual_limit,
-        score_threshold=request.score_threshold,
-        filter=request.filter,
-    )
-    # Convert FindResult to dict if it has to_dict method
-    if hasattr(result, "to_dict"):
-        result = result.to_dict()
+    collector = create_collector("search.find", request.trace)
+    with bind_trace_collector(collector):
+        result = await service.search.find(
+            query=request.query,
+            ctx=_ctx,
+            target_uri=request.target_uri,
+            limit=actual_limit,
+            score_threshold=request.score_threshold,
+            filter=request.filter,
+        )
+        # Convert FindResult to dict if it has to_dict method
+        if hasattr(result, "to_dict"):
+            result = result.to_dict()
+        result = inject_trace(result, collector, status="ok")
     return Response(status="ok", result=result)
 
 
@@ -84,26 +91,27 @@ async def search(
 ):
     """Semantic search with optional session context."""
     service = get_service()
-
-    # Get session if session_id provided
-    session = None
-    if request.session_id:
-        session = service.sessions.session(_ctx, request.session_id)
-        await session.load()
-
-    actual_limit = request.node_limit if request.node_limit is not None else request.limit
-    result = await service.search.search(
-        query=request.query,
-        ctx=_ctx,
-        target_uri=request.target_uri,
-        session=session,
-        limit=actual_limit,
-        score_threshold=request.score_threshold,
-        filter=request.filter,
-    )
-    # Convert FindResult to dict if it has to_dict method
-    if hasattr(result, "to_dict"):
-        result = result.to_dict()
+    collector = create_collector("search.search", request.trace)
+    with bind_trace_collector(collector):
+        # Get session if session_id provided
+        session = None
+        if request.session_id:
+            session = service.sessions.session(_ctx, request.session_id)
+            await session.load()
+        actual_limit = request.node_limit if request.node_limit is not None else request.limit
+        result = await service.search.search(
+            query=request.query,
+            ctx=_ctx,
+            target_uri=request.target_uri,
+            session=session,
+            limit=actual_limit,
+            score_threshold=request.score_threshold,
+            filter=request.filter,
+        )
+        # Convert FindResult to dict if it has to_dict method
+        if hasattr(result, "to_dict"):
+            result = result.to_dict()
+        result = inject_trace(result, collector, status="ok")
     return Response(status="ok", result=result)
 
 

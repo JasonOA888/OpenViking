@@ -294,14 +294,18 @@ class AsyncHTTPClient(BaseClient):
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
+        trace: bool = False,
+        target: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
-        # Validate that only one of 'to' or 'parent' is set
-        if to and parent:
-            raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
+        effective_to = to or target
+        if target and to:
+            raise ValueError("Cannot specify both 'target' and 'to' at the same time.")
+        if effective_to and parent:
+            raise ValueError("Cannot specify both target/to and 'parent' at the same time.")
 
         request_data = {
-            "to": to,
+            "to": effective_to,
             "parent": parent,
             "reason": reason,
             "instruction": instruction,
@@ -312,6 +316,7 @@ class AsyncHTTPClient(BaseClient):
             "include": include,
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
+            "trace": trace,
         }
 
         path_obj = Path(path)
@@ -342,6 +347,7 @@ class AsyncHTTPClient(BaseClient):
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
+        trace: bool = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
         request_data = {
@@ -371,7 +377,7 @@ class AsyncHTTPClient(BaseClient):
 
         response = await self._http.post(
             "/api/v1/skills",
-            json=request_data,
+            json={**request_data, "trace": trace},
         )
         return self._handle_response(response)
 
@@ -518,6 +524,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        trace: bool = False,
     ) -> FindResult:
         """Semantic search without session context."""
         if target_uri:
@@ -531,6 +538,7 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "trace": trace,
             },
         )
         return FindResult.from_dict(self._handle_response(response))
@@ -545,6 +553,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        trace: bool = False,
     ) -> FindResult:
         """Semantic search with optional session context."""
         if target_uri:
@@ -560,6 +569,7 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "trace": trace,
             },
         )
         return FindResult.from_dict(self._handle_response(response))
@@ -655,9 +665,12 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")
         self._handle_response(response)
 
-    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+    async def commit_session(self, session_id: str, trace: bool = False) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
-        response = await self._http.post(f"/api/v1/sessions/{session_id}/commit")
+        response = await self._http.post(
+            f"/api/v1/sessions/{session_id}/commit",
+            json={"trace": trace},
+        )
         return self._handle_response(response)
 
     async def add_message(
