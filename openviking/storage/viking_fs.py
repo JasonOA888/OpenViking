@@ -75,8 +75,15 @@ def init_viking_fs(
     timeout: int = 10,
     enable_recorder: bool = False,
 ) -> "VikingFS":
-    """Initialize VikingFS singleton.
-
+    """Initialize VikingFS singleton with instance contention protection (Issue #473).
+    
+    Multiple stdio MCP sessions can each initialize their own VikingFS instance,
+    leading to resource conflicts in the shared data directory.
+    
+    This implementation acquires a file lock to ensure only one VikingFS instance
+    can access a given data directory at a time. When using HTTP MCP (shared server),
+    this lock is held by the server process.
+    
     Args:
         agfs: Pre-initialized AGFS client (HTTP or Binding)
         agfs_config: AGFS configuration object for backend settings
@@ -86,6 +93,19 @@ def init_viking_fs(
         enable_recorder: Whether to enable IO recording
     """
     global _instance
+
+    # Acquire instance lock to prevent contention (Issue #473)
+    from openviking.storage.instance_lock import VikingFSInstanceLock
+    
+    data_dir = getattr(agfs, 'data_dir', None) or getattr(agfs, 'path', None)
+    if data_dir:
+        try:
+            VikingFSInstanceLock.acquire(data_dir)
+        except Exception as e:
+            logger.error(
+                f"Failed to acquire VikingFS instance lock for {data_dir}: {e}"
+            )
+            raise
 
     _instance = VikingFS(
         agfs=agfs,
