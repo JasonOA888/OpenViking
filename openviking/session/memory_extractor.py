@@ -695,7 +695,11 @@ class MemoryExtractor:
         return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override)
 
     async def _enqueue_semantic_for_parent(self, file_uri: str, ctx: "RequestContext") -> None:
-        """Enqueue semantic generation for parent directory."""
+        """Enqueue semantic generation for parent directory.
+        
+        Optimization (Issue #505): Set recursive=False to prevent O(n²) processing.
+        Only the immediate parent directory will be reprocessed, not all subdirectories.
+        """
         try:
             from openviking.storage.queuefs import get_queue_manager
             from openviking.storage.queuefs.semantic_msg import SemanticMsg
@@ -710,6 +714,7 @@ class MemoryExtractor:
                 user_id=ctx.user.user_id,
                 agent_id=ctx.user.agent_id,
                 role=ctx.role.value,
+                recursive=False,  # Fix O(n²): only process immediate parent
             )
             await semantic_queue.enqueue(msg)
             logger.debug(f"Enqueued semantic generation for: {parent_uri}")
