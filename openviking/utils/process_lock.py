@@ -58,7 +58,8 @@ def _is_pid_alive(pid: int) -> bool:
                 logger.info(
                     "PID %d is alive but not an OpenViking process (cmdline: %.100s). "
                     "Assuming stale lock from recycled PID.",
-                    pid, cmdline[:100],
+                    pid,
+                    cmdline[:100],
                 )
                 return False
         except OSError:
